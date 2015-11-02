@@ -10,15 +10,36 @@
 
 require_once 'vendor/autoload.php';
 
+if (!defined('JPATH_BASE'))
+{
+	define('JPATH_BASE', __DIR__);
+}
+
 class RoboFile extends \Robo\Tasks
 {
 	// Load tasks from composer, see composer.json
 	use \joomla_projects\robo\loadTasks;
+	use \JBuild\Tasks\loadTasks;
 
-	private $extension = '';
+	/**
+	 * File extension for executables
+	 *
+	 * @var string
+	 */
+	private $executableExtension = '';
 
+	/**
+	 * Local configuration parameters
+	 *
+	 * @var array
+	 */
 	private $configuration = array();
 
+	/**
+	 * Path to the local CMS root
+	 *
+	 * @var string
+	 */
 	private $cmsPath = '';
 
 	/**
@@ -30,30 +51,34 @@ class RoboFile extends \Robo\Tasks
 
 		$this->cmsPath = $this->getCmsPath();
 
-		// TODO make this coherent with the above initializations
-		$this->setExecExtension();
+		$this->executableExtension = $this->getExecutableExtension();
+
+		// Set default timezone (so no warnings are generated if it is not set)
+		date_default_timezone_set('UTC');
 	}
 
 	/**
-	* Set the Execute extension for Windows Operating System
-	*
-	* @return void
-	*/
-	private function setExecExtension()
+	 * Get the executable extension according to Operating System
+	 *
+	 * @return void
+	 */
+	private function getExecutableExtension()
 	{
 		if ($this->isWindows())
 		{
-			$this->extension = '.exe';
+			return '.exe';
 		}
+
+		return '';
 	}
 
 	/**
-	* Executes all the Selenium System Tests in a suite on your machine
-	*
-	* @param   bool  $use_htaccess  Renames and enable embedded Joomla .htaccess file
-	*
-	* @return mixed
-	*/
+	 * Executes all the Selenium System Tests in a suite on your machine
+	 *
+	 * @param   bool  $use_htaccess  Renames and enable embedded Joomla .htaccess file
+	 *
+	 * @return mixed
+	 */
 	public function runTests($use_htaccess = false)
 	{
 		$this->createTestingSite($use_htaccess);
@@ -155,12 +180,51 @@ class RoboFile extends \Robo\Tasks
 
 		$pathToTestFile = 'tests/' . $suite . '/' . $test;
 
+		//loading the class to display the methods in the class
+		require 'tests/' . $suite . '/' . $test;
+
+		//logic to fetch the class name from the file name
+		$fileName = explode("/", $test);
+		$className = explode(".", $fileName[1]);
+
+		//if the selected file is cest only than we will give the option to execute individual methods, we don't need this in cept file
+		$i = 1;
+		if (strripos($className[0], 'cest'))
+		{
+			$class_methods = get_class_methods($className[0]);
+			$this->say('[' . $i . '] ' . 'All');
+			$methods[$i] = 'All';
+			$i++;
+			foreach ($class_methods as $method_name)
+			{
+
+				$reflect = new ReflectionMethod($className[0], $method_name);
+				if(!$reflect->isConstructor())
+				{
+					if ($reflect->isPublic())
+					{
+						$this->say('[' . $i . '] ' . $method_name);
+						$methods[$i] = $method_name;
+						$i++;
+					}
+				}
+			}
+			$this->say('');
+			$methodNumber = $this->ask('Please choose the method in the test that you would want to run...');
+			$method = $methods[$methodNumber];
+		}
+
+		if(isset($method) && $method != 'All')
+		{
+			$pathToTestFile = $pathToTestFile . ':' . $method;
+		}
+
 		$this->taskCodecept()
-		     ->test($pathToTestFile)
-		     ->arg('--steps')
-		     ->arg('--debug')
-		     ->run()
-		     ->stopOnFail();
+			->test($pathToTestFile)
+			->arg('--steps')
+			->arg('--debug')
+			->run()
+			->stopOnFail();
 	}
 
 	/**
@@ -236,6 +300,14 @@ class RoboFile extends \Robo\Tasks
 			$this->_exec('chown -R ' . $this->configuration->localUser . ' ' . $this->cmsPath);
 		}
 
+		// Copy current package
+		if (!file_exists('dist/pkg-weblinks-current.zip'))
+		{
+			$this->build(true);
+		}
+
+		$this->_copy('dist/pkg-weblinks-current.zip', $this->cmsPath . "/pkg-weblinks-current.zip");
+
 		$this->say('Joomla CMS site created at ' . $this->cmsPath);
 
 		// Optionally uses Joomla default htaccess file. Used by TravisCI
@@ -280,7 +352,7 @@ class RoboFile extends \Robo\Tasks
 	{
 		$branch = empty($this->configuration->branch) ? 'staging' : $this->configuration->branch;
 
-		return "git" . $this->extension . " clone -b $branch --single-branch --depth 1 https://github.com/joomla/joomla-cms.git tests/cache";
+		return "git" . $this->executableExtension . " clone -b $branch --single-branch --depth 1 https://github.com/joomla/joomla-cms.git tests/cache";
 	}
 
 	/**
@@ -391,5 +463,22 @@ class RoboFile extends \Robo\Tasks
 	private function runPhpcpd()
 	{
 		$this->_exec('phpcpd' . $this->extension . ' ' . __DIR__ . '/src');
+	}
+
+	/**
+	 * Build the joomla extension package
+	 *
+	 * @param   array  $params  Additional params
+	 *
+	 * @return  void
+	 */
+	public function build($params = ['dev' => false])
+	{
+		if (!file_exists('jbuild.ini'))
+		{
+			$this->_copy('jbuild.dist.ini', 'jbuild.ini');
+		}
+
+		$this->taskBuild($params)->run();
 	}
 }
